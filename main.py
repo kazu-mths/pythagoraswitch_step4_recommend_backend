@@ -1,24 +1,18 @@
 from sqlalchemy.orm import Session
-from fastapi import FastAPI, Depends, HTTPException, Query, APIRouter
+from fastapi import FastAPI, Depends, HTTPException, Query, APIRouter, Header
+from fastapi.middleware.cors import CORSMiddleware  # CORSMiddlewareをインポート
 from pydantic import BaseModel
 from sqlalchemy import Boolean, create_engine, Column, Integer, String, DateTime, Numeric
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timedelta
 from fastapi.responses import JSONResponse
-from fastapi import Query
 import os
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import func
 from jose import jwt
-from pytz import timezone
-from fastapi.middleware.cors import CORSMiddleware
 import pytz
 from passlib.context import CryptContext
-from fastapi import Header
-import openai
-from typing import List, Tuple
-
 
 # 環境変数の読み込み
 from dotenv import load_dotenv
@@ -36,16 +30,6 @@ ALGORITHM = "HS256"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI()
-
-# # 環境変数からAPIキーを読み込む
-# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-# if not OPENAI_API_KEY:
-#     raise EnvironmentError("OPENAI_API_KEY is not set in environment variables.")
-
-# openai.api_key = OPENAI_API_KEY
-
-# # OpenAIのAPIキーをセットアップ
-# openai.api_key = OPENAI_API_KEY
 
 # CORS設定
 app.add_middleware(
@@ -98,6 +82,8 @@ class UserResponse(BaseModel):
     user_id: int
     user_name: str
     # password フィールドは含まない
+    class Config:
+        from_attributes = True  # ORMモデルとの互換性のために追加
 
 
 # データベースのセットアップ
@@ -124,6 +110,7 @@ class Purchase_HistoryDB(Base):
     quantity = Column(Integer, nullable=False)
     favorite = Column(Boolean, nullable=False, default=False)
     registration_date = Column(DateTime, nullable=False)  # nullable=TrueからFalseに変更
+    
 
 # リクエストボディのモデル定義
 class Product(BaseModel):
@@ -155,7 +142,7 @@ class PurchaseHistoryResponse(BaseModel):
     registration_date: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # 購入履歴のレスポンスモデルを定義
 class RecentPurchase(BaseModel):
@@ -173,8 +160,12 @@ class MyPageResponse(BaseModel):
     recent_purchases: List[RecentPurchase]
     favorite_products: List[FavoriteProduct]
 
-# データベースのセットアップ
-Base.metadata.create_all(bind=engine)
+# 商品情報登録用のPydanticモデル
+class PurchaseHistoryCreate(BaseModel):
+    product_id: int
+    quantity: int
+    favorite: bool
+    registration_date: datetime
 
 def get_db():
     db = SessionLocal()
@@ -197,50 +188,15 @@ def to_jst(datetime_obj):
 
 router = APIRouter()
 
-# class ConsultationRequest(BaseModel):
-#     text: str
+# 認証用ユーティリティ関数
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
 
-# class ProductRecommendation(BaseModel):
-#     product_id: int
-#     product_name: str
-#     similarity_score: float
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
-# class RecommendationResponse(BaseModel):
-#     recommendations: List[ProductRecommendation]
-#     response_text: str
-
-# def calculate_similarity(consultation_embedding: dict, product_embeddings: List[Tuple[ProductDB, dict]]) -> List[ProductRecommendation]:
-#     recommendations = []
-#     for product, product_embedding in product_embeddings:
-#         similarity = openai.Embedding.similarity(consultation_embedding["embedding"], product_embedding["embedding"])
-#         recommendations.append(ProductRecommendation(
-#             product_id=product.product_id,
-#             product_name=product.product_name,
-#             similarity_score=similarity
-#         ))
-#     recommendations.sort(key=lambda x: x.similarity_score, reverse=True)
-#     return recommendations
-
-# def generate_response_text(consultation_text, recommendations):
-#     prompt = f"ユーザーの相談内容: {consultation_text}\nおすすめの商品: {', '.join([r.product_name for r in recommendations[:3]])}\n返答を生成してください。"
-#     response = openai.Completion.create(
-#         engine="text-davinci-002",
-#         prompt=prompt,
-#         max_tokens=150
-#     )
-#     return response.choices[0].text.strip()
-
-# @router.post("/recommend", response_model=RecommendationResponse)
-# async def recommend_products(consultation: ConsultationRequest, db: Session = Depends(get_db)):
-#     consultation_embedding = openai.Embedding.create(
-#         input=consultation.text,
-#         model="text-embedding-ada-002"
-#     )
-#     products = db.query(ProductDB).all()
-#     product_embeddings = [(product, openai.Embedding.create(input=product.description, model="text-embedding-ada-002")) for product in products]
-#     recommendations = calculate_similarity(consultation_embedding, product_embeddings)
-#     response_text = generate_response_text(consultation.text, recommendations)
-#     return RecommendationResponse(recommendations=recommendations, response_text=response_text)
+def get_user_by_token(db: Session, token: str):
+    return db.query(UserDB).filter(UserDB.token == token).first()
 
 app.include_router(router)
 
@@ -292,6 +248,19 @@ async def login(user: User, db: Session = Depends(get_db)):
         access_token = user_info.token
 
     return {"access_token": access_token, "user_name": user_info.user_name}
+
+@app.get('/shopping')
+async def read_login(token: str = Query(..., description="Token information")):
+    db = SessionLocal()
+    # ユーザーの認証
+    user_info = db.query(UserDB).filter_by(token=token).first()
+    if not user_info:
+        raise HTTPException(status_code=401, detail="Bad token")
+
+    user_name = user_info.user_name
+
+    # ユーザー名とユーザーIDをクライアントに返す
+    return {"user_name": user_name, "user_id": user_info.user_id}
 
 @app.get('/mypage', response_model=MyPageResponse)
 async def read_user_data(token: str = Query(..., description="Token information"), db: Session = Depends(get_db)):
@@ -374,6 +343,7 @@ async def read_products_info(qrcode: int = Query(..., description="Product QR co
 
 from fastapi import Header
 
+# 商品情報を登録するエンドポイント
 @app.post('/purchase', response_model=PurchaseHistoryResponse)
 async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Session = Depends(get_db), authorization: Optional[str] = Header(None)):
     if authorization is None:
@@ -385,28 +355,22 @@ async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Sess
     if not token:
         raise HTTPException(status_code=401, detail="Token not provided.")
 
-    user_info = db.query(UserDB).filter(UserDB.token == token).first()
+    user_info = get_user_by_token(db, token)
     if not user_info:
         raise HTTPException(status_code=404, detail="User not found or invalid token")
-
-    # UTCで取得した日時をJSTに変換
-    buy_time_utc = purchase_history.registration_date  # `buy_time`フィールドを`registration_date`に修正
-    jst = pytz.timezone('Asia/Tokyo')
-    buy_time_jst = buy_time_utc.astimezone(jst)
 
     new_history = Purchase_HistoryDB(
         user_id=user_info.user_id,
         product_id=purchase_history.product_id,
         quantity=purchase_history.quantity,
         favorite=purchase_history.favorite,
-        registration_date=buy_time_jst
+        registration_date=purchase_history.registration_date
     )
 
     db.add(new_history)
     db.commit()
     db.refresh(new_history)
 
-    # 正しいフィールドを持つレスポンスを返す
     return PurchaseHistoryResponse(
         purchase_id=new_history.purchase_id,
         user_id=new_history.user_id,
@@ -415,3 +379,6 @@ async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Sess
         favorite=new_history.favorite,
         registration_date=new_history.registration_date
     )
+
+# データベースのセットアップ
+Base.metadata.create_all(bind=engine)
