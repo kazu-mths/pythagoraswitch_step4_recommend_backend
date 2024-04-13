@@ -50,6 +50,7 @@ pycparser
 pycryptodome
 pydantic_core
 PyJWT
+pymongo
 pyparsing
 python-dateutil
 python-jose
