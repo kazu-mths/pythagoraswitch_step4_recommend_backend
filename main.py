@@ -13,6 +13,18 @@ from sqlalchemy import func
 from jose import jwt
 import pytz
 from passlib.context import CryptContext
+import pandas as pd
+
+# MongoDB接続ライブラリ
+from pymongo import MongoClient
+from typing import List, Optional
+from bson import ObjectId
+
+# OpenAI接続
+from openai import OpenAI
+import numpy as np
+from scipy.spatial.distance import cosine
+
 
 # 環境変数の読み込み
 from dotenv import load_dotenv
@@ -25,6 +37,14 @@ if not DATABASE_URL:
 SECRET_KEY = os.getenv('SECRET_KEY')
 if not SECRET_KEY:
     raise EnvironmentError("SECRET_KEY is not set in .env file")
+
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    raise EnvironmentError("OPENAI_API_KEY is not set in .env file")
+
+MONGODB_URL = os.getenv('MONGODB_URL')
+if not DATABASE_URL:
+    raise EnvironmentError("MONGODB_URL is not set in .env file")
 
 ALGORITHM = "HS256"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -110,7 +130,7 @@ class Purchase_HistoryDB(Base):
     quantity = Column(Integer, nullable=False)
     favorite = Column(Boolean, nullable=False, default=False)
     registration_date = Column(DateTime, nullable=False)  # nullable=TrueからFalseに変更
-    
+
 
 # リクエストボディのモデル定義
 class Product(BaseModel):
@@ -348,7 +368,7 @@ from fastapi import Header
 async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Session = Depends(get_db), authorization: Optional[str] = Header(None)):
     if authorization is None:
         raise HTTPException(status_code=400, detail="Authorization header is missing.")
-    
+
     scheme, _, token = authorization.partition(' ')
     if not scheme or scheme.lower() != 'bearer':
         raise HTTPException(status_code=401, detail="Invalid authentication scheme.")
@@ -379,6 +399,96 @@ async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Sess
         favorite=new_history.favorite,
         registration_date=new_history.registration_date
     )
+
+# MongoDB サーバーに接続
+client = MongoClient(MONGODB_URL)
+db = client["facial_treatment_gpt"]  # データベース名を指定
+collection = db["embeddings_mandom_mensfacial"] #コレクション名を指定
+
+#MongoDBのコレクションを定義
+class Vector(BaseModel):
+    input_prompt: str
+
+
+#OpenAIの利用およびベクトル近似関数の定義
+client2 = OpenAI()
+
+def str2vec_openai(input_str):
+    return client2.embeddings.create(input = [input_str], model="text-embedding-3-small").data[0].embedding
+
+def similar_point_cosine(input_vec1,input_vec2):
+    return 1 - cosine(input_vec1, input_vec2)
+
+#検索の関数定義
+system_algorithm = "あなたは優秀で、入力された文字を正確に分類します。出力はジャンル、特長と効果、対象肌質、使用感の順で出力します。出力する言語は日本語です。"
+ata2vec_algorithm_version = "1.0.0"
+
+def insert2mongo_str2vec_openai(input_str):
+    data2vec_response = client2.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system", "content": system_algorithm},
+        {"role": "user", "content": input_str},
+    ]
+    )
+    data2vec = data2vec_response.choices[0].message.content
+    embedding_response = str2vec_openai(data2vec)
+    useArray_search_to_db = {
+        "data":input_str,
+        "product_name":"unknown",
+        "data2vec":data2vec,
+        "data2vec_algorithm_version":ata2vec_algorithm_version,
+        "model":"text-embedding-3-small",
+        "embedding":embedding_response
+    }
+    return useArray_search_to_db
+
+
+#　肌の悩みに最適な化粧水をリコメンドする
+@app.post('/vector')
+async def vector(vector: Vector):
+
+    input_prompt = vector.input_prompt
+
+    res = insert2mongo_str2vec_openai(input_prompt)
+
+    result = collection.find()
+    df = pd.DataFrame(result)
+
+    vec2_args = res["embedding"]
+    df["similar"] = df.embedding.apply(similar_point_cosine,input_vec2=vec2_args,)
+    new_df = df.sort_values("similar", ascending=False).iloc[:3].copy()
+    recommend_array = new_df["data"].to_list()
+
+    system_recommend_str = ""
+    for i in range(len(recommend_array)):
+        system_recommend_str += "    " + str(i + 1) + ". " + recommend_array[i] + "\n"
+
+    system = f"""
+    あなたは美容部員・BA（ビューティアドバイザー）です。出力は30代～40代の肌の悩みをぼんやり持つ大人の男性に対して、的確に、さりげなく商品を提案してください。
+
+    # 前提条件:
+    - 以下の情報はメンズ美容商品であり、これらをおすすめするように返答する。
+    - 以下美容部員・BA（ビューティアドバイザー）がおすすめしたい商品：
+    {system_recommend_str}
+    """
+
+    response = client2.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": input_prompt},
+        ],
+        temperature=0.0,
+        )
+    data2vec = response.choices[0].message.content
+
+
+    return {"recommend_comment": data2vec}
+
+
+
+
 
 # データベースのセットアップ
 Base.metadata.create_all(bind=engine)
