@@ -403,7 +403,7 @@ async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Sess
 # MongoDB サーバーに接続
 client = MongoClient(MONGODB_URL)
 db = client["facial_treatment_gpt"]  # データベース名を指定
-collection = db["embeddings_mandom_mensfacial"] #コレクション名を指定
+collection = db["embeddings_mens_facial"] #コレクション名を指定
 
 #MongoDBのコレクションを定義
 class Vector(BaseModel):
@@ -466,6 +466,7 @@ async def vector(vector: Vector):
 
     system = f"""
     あなたは美容部員・BA（ビューティアドバイザー）です。出力は30代～40代の肌の悩みをぼんやり持つ大人の男性に対して、的確に、さりげなく商品を提案してください。
+    商品のメーカー名を間違えないで下さい。
 
     # 前提条件:
     - 以下の情報はメンズ美容商品であり、これらをおすすめするように返答する。
