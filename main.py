@@ -422,15 +422,87 @@ async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Sess
         registration_date=new_history.registration_date
     )
 
-@router.post("/survey", response_model=List[SurveyResponseSchema])
-async def submit_survey(responses: List[SurveyResponseCreate], db: Session = Depends(get_db), user: UserDB = Depends(get_current_user)):
-    responses_data = []
-    for response in responses:
-        new_response = SurveyResponse(
-            user_id=user.user_id,
-            question_id=response.question_id,
-            answer_text=response.answer_text,
-            created_at=datetime.utcnow()
+# MongoDB サーバーに接続
+client = MongoClient(MONGODB_URL)
+db = client["facial_treatment_gpt"]  # データベース名を指定
+collection = db["embeddings_mens_facial"] #コレクション名を指定
+
+#MongoDBのコレクションを定義
+class Vector(BaseModel):
+    input_prompt: str
+
+
+#OpenAIの利用およびベクトル近似関数の定義
+client2 = OpenAI()
+
+def str2vec_openai(input_str):
+    return client2.embeddings.create(input = [input_str], model="text-embedding-3-small").data[0].embedding
+
+def similar_point_cosine(input_vec1,input_vec2):
+    return 1 - cosine(input_vec1, input_vec2)
+
+#検索の関数定義
+system_algorithm = "あなたは優秀で、入力された文字を正確に分類します。出力はジャンル、特長と効果、対象肌質、使用感の順で出力します。出力する言語は日本語です。"
+ata2vec_algorithm_version = "1.0.0"
+
+def insert2mongo_str2vec_openai(input_str):
+    data2vec_response = client2.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system", "content": system_algorithm},
+        {"role": "user", "content": input_str},
+    ]
+    )
+    data2vec = data2vec_response.choices[0].message.content
+    embedding_response = str2vec_openai(data2vec)
+    useArray_search_to_db = {
+        "data":input_str,
+        "product_name":"unknown",
+        "data2vec":data2vec,
+        "data2vec_algorithm_version":ata2vec_algorithm_version,
+        "model":"text-embedding-3-small",
+        "embedding":embedding_response
+    }
+    return useArray_search_to_db
+
+
+#　肌の悩みに最適な化粧水をリコメンドする
+@app.post('/vector')
+async def vector(vector: Vector):
+
+    input_prompt = vector.input_prompt
+
+    res = insert2mongo_str2vec_openai(input_prompt)
+
+    result = collection.find()
+    df = pd.DataFrame(result)
+
+    vec2_args = res["embedding"]
+    df["similar"] = df.embedding.apply(similar_point_cosine,input_vec2=vec2_args,)
+    new_df = df.sort_values("similar", ascending=False).iloc[:3].copy()
+    recommend_array = new_df["data"].to_list()
+
+    system_recommend_str = ""
+    for i in range(len(recommend_array)):
+        system_recommend_str += "    " + str(i + 1) + ". " + recommend_array[i] + "\n"
+
+    system = f"""
+    あなたは美容部員・BA（ビューティアドバイザー）です。出力は30代～40代の肌の悩みをぼんやり持つ大人の男性に対して、的確に、さりげなく商品を提案してください。
+    商品のメーカー名を間違えないで下さい。
+
+    # 前提条件:
+    - 以下の情報はメンズ美容商品であり、これらをおすすめするように返答する。
+    - 以下美容部員・BA（ビューティアドバイザー）がおすすめしたい商品：
+    {system_recommend_str}
+    """
+
+    response = client2.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": input_prompt},
+        ],
+        temperature=0.0,
         )
         db.add(new_response)
         responses_data.append(new_response)
