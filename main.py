@@ -14,6 +14,17 @@ from sqlalchemy import func
 from jose import jwt, JWTError
 import pytz
 from passlib.context import CryptContext
+import pandas as pd
+
+# MongoDB接続ライブラリ
+from pymongo import MongoClient
+from typing import List, Optional
+from bson import ObjectId
+
+# OpenAI接続
+from openai import OpenAI
+import numpy as np
+from scipy.spatial.distance import cosine
 
 # 環境変数の読み込み
 from dotenv import load_dotenv
@@ -26,6 +37,14 @@ if not DATABASE_URL:
 SECRET_KEY = os.getenv('SECRET_KEY')
 if not SECRET_KEY:
     raise EnvironmentError("SECRET_KEY is not set in .env file")
+
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    raise EnvironmentError("OPENAI_API_KEY is not set in .env file")
+
+MONGODB_URL = os.getenv('MONGODB_URL')
+if not DATABASE_URL:
+    raise EnvironmentError("MONGODB_URL is not set in .env file")
 
 ALGORITHM = "HS256"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -504,12 +523,10 @@ async def vector(vector: Vector):
         ],
         temperature=0.0,
         )
-        db.add(new_response)
-        responses_data.append(new_response)
-    db.commit()
-    return responses_data
+    data2vec = response.choices[0].message.content
 
-app.include_router(router)
+
+return {"recommend_comment": data2vec}
 
 # データベースのセットアップ
 Base.metadata.create_all(bind=engine)
