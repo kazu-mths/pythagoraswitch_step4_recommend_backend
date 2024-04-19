@@ -2,29 +2,18 @@ from sqlalchemy.orm import Session
 from fastapi import FastAPI, Depends, HTTPException, Query, APIRouter, Header
 from fastapi.middleware.cors import CORSMiddleware  # CORSMiddlewareをインポート
 from pydantic import BaseModel
-from sqlalchemy import Boolean, create_engine, Column, Integer, String, DateTime, Numeric
+from sqlalchemy import Boolean, create_engine, Column, Integer, String, DateTime, Numeric, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import relationship
 from datetime import datetime, timedelta
 from fastapi.responses import JSONResponse
 import os
 from typing import Optional, List
 from sqlalchemy import func
-from jose import jwt
+from jose import jwt, JWTError
 import pytz
 from passlib.context import CryptContext
-import pandas as pd
-
-# MongoDB接続ライブラリ
-from pymongo import MongoClient
-from typing import List, Optional
-from bson import ObjectId
-
-# OpenAI接続
-from openai import OpenAI
-import numpy as np
-from scipy.spatial.distance import cosine
-
 
 # 環境変数の読み込み
 from dotenv import load_dotenv
@@ -37,14 +26,6 @@ if not DATABASE_URL:
 SECRET_KEY = os.getenv('SECRET_KEY')
 if not SECRET_KEY:
     raise EnvironmentError("SECRET_KEY is not set in .env file")
-
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-if not OPENAI_API_KEY:
-    raise EnvironmentError("OPENAI_API_KEY is not set in .env file")
-
-MONGODB_URL = os.getenv('MONGODB_URL')
-if not DATABASE_URL:
-    raise EnvironmentError("MONGODB_URL is not set in .env file")
 
 ALGORITHM = "HS256"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -65,6 +46,29 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+class SurveyResponseCreate(BaseModel):
+    question_id: str
+    answer_text: str
+
+class SurveyResponse(Base):
+    __tablename__ = 'survey_responses'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.user_id'))
+    question_id = Column(String, nullable=False)  # 質問IDを格納するカラム（文字列型）
+    answer_text = Column(String, nullable=False)  # 回答テキスト
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("UserDB", back_populates="survey_responses")
+
+class SurveyResponseSchema(BaseModel):
+    id: int
+    user_id: int
+    answer_text: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
 class ProductDB(Base):
     __tablename__ = 'products'
     product_id = Column(Integer, primary_key=True, nullable=False)
@@ -79,6 +83,7 @@ class ProductDB(Base):
     product_qrcode = Column(Integer, unique=True, nullable=False)
     quantity = Column(Integer, nullable=False)
     last_update = Column(DateTime, default=datetime.utcnow)
+    image_url = Column(String(255), nullable=True)  # 画像URLを保存するカラムを追加
 
 class UserDB(Base):
     __tablename__ = 'users'
@@ -87,6 +92,8 @@ class UserDB(Base):
     hashed_password = Column(String(1000), nullable=True)
     token = Column(String(1000), nullable=True)
     last_update = Column(DateTime, default=datetime.utcnow)
+    first_login = Column(Boolean, default=True)
+    survey_responses = relationship("SurveyResponse", back_populates="user")
 
 # ユーザー情報を格納するためのモデル
 class User(BaseModel):
@@ -122,6 +129,23 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     return pwd_context.hash(password)
 
+# ユーザー認証を行う関数
+def get_current_user(db: Session = Depends(get_db), token:str = Query(...)):
+    try:
+        # トークンのデコード
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid JWT token")
+    
+    # データベースからユーザーを取得
+    user = db.query(UserDB).filter(UserDB.user_name == username).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
 class Purchase_HistoryDB(Base):
     __tablename__ = 'purchase_history'  # テーブル名を指定
     purchase_id = Column(Integer, primary_key=True, nullable=False)
@@ -130,7 +154,7 @@ class Purchase_HistoryDB(Base):
     quantity = Column(Integer, nullable=False)
     favorite = Column(Boolean, nullable=False, default=False)
     registration_date = Column(DateTime, nullable=False)  # nullable=TrueからFalseに変更
-
+    
 
 # リクエストボディのモデル定義
 class Product(BaseModel):
@@ -187,13 +211,6 @@ class PurchaseHistoryCreate(BaseModel):
     favorite: bool
     registration_date: datetime
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -217,8 +234,6 @@ def get_password_hash(password):
 
 def get_user_by_token(db: Session, token: str):
     return db.query(UserDB).filter(UserDB.token == token).first()
-
-app.include_router(router)
 
 @app.post("/register", response_model=UserResponse)
 async def create_user(user: UserCreate, db: Session = Depends(get_db)):
@@ -250,6 +265,12 @@ async def login(user: User, db: Session = Depends(get_db)):
     if not verify_password(user.password, user_info.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
 
+    # 初回ログインチェック
+    if user_info.first_login:
+        # トークン生成と初回フラグの更新
+        user_info.first_login = False  # フラグを更新
+        db.commit()
+
     now = datetime.now()
     # トークンの更新または新規作成の必要性をチェック
     if user_info.token is None or (now - user_info.last_update) > timedelta(days=7):
@@ -267,7 +288,7 @@ async def login(user: User, db: Session = Depends(get_db)):
     else:
         access_token = user_info.token
 
-    return {"access_token": access_token, "user_name": user_info.user_name}
+    return {"access_token": access_token, "user_name": user_info.user_name, "first_login": not user_info.first_login}
 
 @app.get('/shopping')
 async def read_login(token: str = Query(..., description="Token information")):
@@ -354,6 +375,7 @@ async def read_products_info(qrcode: int = Query(..., description="Product QR co
             "volume": product.volume,
             "including_tax_price": product.including_tax_price,
             "quantity": product.quantity,
+            "image_url": product.image_url  # 画像URLをレスポンスに追加
         }
         db.close()
         return product_info
@@ -368,7 +390,7 @@ from fastapi import Header
 async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Session = Depends(get_db), authorization: Optional[str] = Header(None)):
     if authorization is None:
         raise HTTPException(status_code=400, detail="Authorization header is missing.")
-
+    
     scheme, _, token = authorization.partition(' ')
     if not scheme or scheme.lower() != 'bearer':
         raise HTTPException(status_code=401, detail="Invalid authentication scheme.")
@@ -482,14 +504,12 @@ async def vector(vector: Vector):
         ],
         temperature=0.0,
         )
-    data2vec = response.choices[0].message.content
+        db.add(new_response)
+        responses_data.append(new_response)
+    db.commit()
+    return responses_data
 
-
-    return {"recommend_comment": data2vec}
-
-
-
-
+app.include_router(router)
 
 # データベースのセットアップ
 Base.metadata.create_all(bind=engine)
