@@ -526,7 +526,7 @@ async def vector(vector: Vector):
     data2vec = response.choices[0].message.content
 
 
-return {"recommend_comment": data2vec}
+    return {"recommend_comment": data2vec}
 
 # データベースのセットアップ
 Base.metadata.create_all(bind=engine)
