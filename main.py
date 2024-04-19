@@ -441,6 +441,23 @@ async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Sess
         registration_date=new_history.registration_date
     )
 
+@router.post("/survey", response_model=List[SurveyResponseSchema])
+async def submit_survey(responses: List[SurveyResponseCreate], db: Session = Depends(get_db), user: UserDB = Depends(get_current_user)):
+    responses_data = []
+    for response in responses:
+        new_response = SurveyResponse(
+            user_id=user.user_id,
+            question_id=response.question_id,
+            answer_text=response.answer_text,
+            created_at=datetime.utcnow()
+        )
+        db.add(new_response)
+        responses_data.append(new_response)
+    db.commit()
+    return responses_data
+
+app.include_router(router)
+
 # MongoDB サーバーに接続
 client = MongoClient(MONGODB_URL)
 db = client["facial_treatment_gpt"]  # データベース名を指定
