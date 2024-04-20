@@ -132,6 +132,29 @@ class UserResponse(BaseModel):
         from_attributes = True  # ORMモデルとの互換性のために追加
 
 
+class CounselingDB(Base):
+    __tablename__ = 'counseling'
+    counseling_id = Column(Integer, primary_key=True, nullable=False)
+    user_id = Column(Integer, nullable=False)
+    question_id = Column(Integer, nullable=False)
+    question = Column(String(255), nullable=False)
+    answer = Column(String(255), nullable=False)
+    answer_date =  Column(DateTime, default=datetime)
+
+class Counseling(BaseModel):
+    user_id: int
+    question_id1: str
+    question1: str
+    answer1: str
+    question_id2: str
+    question2: str
+    answer2: str
+    question_id3: str
+    question3: str
+    answer3: str
+    answer_date: datetime
+
+
 # データベースのセットアップ
 Base.metadata.create_all(bind=engine)
 
@@ -158,7 +181,7 @@ def get_current_user(db: Session = Depends(get_db), token:str = Query(...)):
             raise HTTPException(status_code=401, detail="Invalid JWT token")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid JWT token")
-    
+
     # データベースからユーザーを取得
     user = db.query(UserDB).filter(UserDB.user_name == username).first()
     if user is None:
@@ -173,7 +196,7 @@ class Purchase_HistoryDB(Base):
     quantity = Column(Integer, nullable=False)
     favorite = Column(Boolean, nullable=False, default=False)
     registration_date = Column(DateTime, nullable=False)  # nullable=TrueからFalseに変更
-    
+
 
 # リクエストボディのモデル定義
 class Product(BaseModel):
@@ -409,7 +432,7 @@ from fastapi import Header
 async def add_purchase_history(purchase_history: PurchaseHistoryCreate, db: Session = Depends(get_db), authorization: Optional[str] = Header(None)):
     if authorization is None:
         raise HTTPException(status_code=400, detail="Authorization header is missing.")
-    
+
     scheme, _, token = authorization.partition(' ')
     if not scheme or scheme.lower() != 'bearer':
         raise HTTPException(status_code=401, detail="Invalid authentication scheme.")
@@ -465,6 +488,7 @@ collection = db["embeddings_mens_facial"] #コレクション名を指定
 
 #MongoDBのコレクションを定義
 class Vector(BaseModel):
+    token:str
     input_prompt: str
 
 
@@ -502,11 +526,40 @@ def insert2mongo_str2vec_openai(input_str):
     return useArray_search_to_db
 
 
-#　肌の悩みに最適な化粧水をリコメンドする
+#肌の悩みに最適な化粧水をリコメンドする
 @app.post('/vector')
 async def vector(vector: Vector):
-
+    db = SessionLocal()
     input_prompt = vector.input_prompt
+
+    user = db.query(UserDB).filter(UserDB.token == vector.token).first()
+
+    if not user:
+        # トークンに対応するユーザーが存在しない場合
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # CounselingDBから該当ユーザーの最新のカウンセリングデータを取得
+    latest_counseling_data = db.query(CounselingDB)\
+        .filter(CounselingDB.user_id == user.user_id)\
+        .order_by(CounselingDB.answer_date.desc())\
+        .all()
+
+    if not latest_counseling_data:
+        # カウンセリングデータが見つからない場合
+        raise HTTPException(status_code=404, detail="No counseling data available")
+
+    # 最新の日付を取得
+    latest_date = latest_counseling_data[0].answer_date
+
+    # 最新の日付でフィルタリングした結果を取得
+    latest_counseling_entries = db.query(CounselingDB)\
+        .filter(CounselingDB.user_id == user.user_id)\
+        .filter(CounselingDB.answer_date == latest_date)\
+        .all()
+    db.close()
+
+    user_info = f'あなたの大切なお客様の{user.user_name}さんは以下の特徴や状態です。\n'
+    user_info += '\n'.join(f'"{entry.question}"という質問に"{entry.answer}"と回答してます。' for entry in latest_counseling_entries)
 
     res = insert2mongo_str2vec_openai(input_prompt)
 
@@ -523,8 +576,12 @@ async def vector(vector: Vector):
         system_recommend_str += "    " + str(i + 1) + ". " + recommend_array[i] + "\n"
 
     system = f"""
-    あなたは美容部員・BA（ビューティアドバイザー）です。出力は30代～40代の肌の悩みをぼんやり持つ大人の男性に対して、的確に、さりげなく商品を提案してください。
+    あなたは美容部員・BA（ビューティアドバイザー）です。出力としてお客様の名前を文中に必ず１回入れて、
+    フレンドリーな口調で、的確に、さりげなく商品を提案してください。
     商品のメーカー名を間違えないで下さい。
+
+    #お客様の情報：
+    {user_info}
 
     # 前提条件:
     - 以下の情報はメンズ美容商品であり、これらをおすすめするように返答する。
@@ -547,3 +604,44 @@ async def vector(vector: Vector):
 
 # データベースのセットアップ
 Base.metadata.create_all(bind=engine)
+
+
+@app.post('/counseling')
+async def read_counseling_data(counseling: Counseling):
+    db = SessionLocal()
+
+    # UTCで取得した日時をJSTに変換
+    answer_date_utc = counseling.answer_date
+    jst = pytz.timezone('Asia/Tokyo')
+    answer_date_jst = answer_date_utc.astimezone(jst)
+
+    # データベースオブジェクトの作成
+    counseling_data = [
+        CounselingDB(
+            user_id=counseling.user_id,
+            question_id=counseling.question_id1,
+            question=counseling.question1,
+            answer=counseling.answer1,
+            answer_date=answer_date_jst
+        ),
+        CounselingDB(
+            user_id=counseling.user_id,
+            question_id=counseling.question_id2,
+            question=counseling.question2,
+            answer=counseling.answer2,
+            answer_date=answer_date_jst
+        ),
+        CounselingDB(
+            user_id=counseling.user_id,
+            question_id=counseling.question_id3,
+            question=counseling.question3,
+            answer=counseling.answer3,
+            answer_date=answer_date_jst
+        )
+    ]
+
+    # トレードをデータベースに追加してコミット
+    db.add_all(counseling_data)
+    db.commit()
+
+    return {'message': 'Counseling Data added successfully'}
