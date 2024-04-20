@@ -132,29 +132,6 @@ class UserResponse(BaseModel):
         from_attributes = True  # ORMモデルとの互換性のために追加
 
 
-class CounselingDB(Base):
-    __tablename__ = 'counseling'
-    counseling_id = Column(Integer, primary_key=True, nullable=False)
-    user_id = Column(Integer, nullable=False)
-    question_id = Column(Integer, nullable=False)
-    question = Column(String(255), nullable=False)
-    answer = Column(String(255), nullable=False)
-    answer_date =  Column(DateTime, default=datetime)
-
-class Counseling(BaseModel):
-    user_id: int
-    question_id1: str
-    question1: str
-    answer1: str
-    question_id2: str
-    question2: str
-    answer2: str
-    question_id3: str
-    question3: str
-    answer3: str
-    answer_date: datetime
-
-
 # データベースのセットアップ
 Base.metadata.create_all(bind=engine)
 
@@ -602,13 +579,34 @@ async def vector(vector: Vector):
 
     return {"recommend_comment": data2vec}
 
-# データベースのセットアップ
-Base.metadata.create_all(bind=engine)
+class CounselingDB(Base):
+    __tablename__ = 'counseling'
+    counseling_id = Column(Integer, primary_key=True, nullable=False)
+    user_id = Column(Integer, nullable=False)
+    question_id = Column(Integer, nullable=False)
+    question = Column(String(255), nullable=False)
+    answer = Column(String(255), nullable=False)
+    answer_date =  Column(DateTime, default=datetime)
+
+class Counseling(BaseModel):
+    token: str
+    question_id1: str
+    question1: str
+    answer1: str
+    question_id2: str
+    question2: str
+    answer2: str
+    question_id3: str
+    question3: str
+    answer3: str
+    answer_date: datetime
 
 
 @app.post('/counseling')
 async def read_counseling_data(counseling: Counseling):
     db = SessionLocal()
+
+    user = db.query(UserDB).filter(UserDB.token == counseling.token).first()
 
     # UTCで取得した日時をJSTに変換
     answer_date_utc = counseling.answer_date
@@ -618,21 +616,21 @@ async def read_counseling_data(counseling: Counseling):
     # データベースオブジェクトの作成
     counseling_data = [
         CounselingDB(
-            user_id=counseling.user_id,
+            user_id=user.user_id,
             question_id=counseling.question_id1,
             question=counseling.question1,
             answer=counseling.answer1,
             answer_date=answer_date_jst
         ),
         CounselingDB(
-            user_id=counseling.user_id,
+            user_id=user.user_id,
             question_id=counseling.question_id2,
             question=counseling.question2,
             answer=counseling.answer2,
             answer_date=answer_date_jst
         ),
         CounselingDB(
-            user_id=counseling.user_id,
+            user_id=user.user_id,
             question_id=counseling.question_id3,
             question=counseling.question3,
             answer=counseling.answer3,
@@ -645,3 +643,7 @@ async def read_counseling_data(counseling: Counseling):
     db.commit()
 
     return {'message': 'Counseling Data added successfully'}
+
+
+# データベースのセットアップ
+Base.metadata.create_all(bind=engine)
