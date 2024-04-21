@@ -54,10 +54,7 @@ app = FastAPI()
 # CORS設定
 app.add_middleware(
     CORSMiddleware,
-        allow_origins=[
-        "https://tech0-gen-5-step4-studentwebapp-1.azurewebsites.net",
-        "https://tech0-gen-5-step4-studentwebapp-2.azurewebsites.net"
-    ],
+    allow_origins=["*"],  # ここに許可するオリジンを指定します。*はすべてのオリジンを許可します。
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # 許可するメソッドを指定します。
     allow_headers=["*"],  # すべてのヘッダーを許可します。必要に応じて指定します。
@@ -216,7 +213,6 @@ class RecentPurchase(BaseModel):
     product_name: str
     quantity: int
     registration_date: datetime
-    image_url: str
 
 class FavoriteProduct(BaseModel):
     product_id: int
@@ -339,7 +335,6 @@ async def read_user_data(token: str = Query(..., description="Token information"
     recent_purchases_query = db.query(
         Purchase_HistoryDB.purchase_id,
         ProductDB.product_name,
-            ProductDB.image_url,
         Purchase_HistoryDB.quantity,
         Purchase_HistoryDB.registration_date
     ).select_from(Purchase_HistoryDB).join(
