@@ -54,7 +54,10 @@ app = FastAPI()
 # CORS設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ここに許可するオリジンを指定します。*はすべてのオリジンを許可します。
+        allow_origins=[
+        "https://tech0-gen-5-step4-studentwebapp-1.azurewebsites.net",
+        "https://tech0-gen-5-step4-studentwebapp-2.azurewebsites.net"
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # 許可するメソッドを指定します。
     allow_headers=["*"],  # すべてのヘッダーを許可します。必要に応じて指定します。
