@@ -219,6 +219,7 @@ class FavoriteProduct(BaseModel):
     product_id: int
     product_name: str
     including_tax_price: int
+    image_url: str
 
 class MyPageResponse(BaseModel):
     recent_purchases: List[RecentPurchase]
