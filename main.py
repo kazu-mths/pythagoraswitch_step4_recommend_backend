@@ -213,6 +213,7 @@ class RecentPurchase(BaseModel):
     product_name: str
     quantity: int
     registration_date: datetime
+    image_url: str
 
 class FavoriteProduct(BaseModel):
     product_id: int
@@ -335,6 +336,7 @@ async def read_user_data(token: str = Query(..., description="Token information"
     recent_purchases_query = db.query(
         Purchase_HistoryDB.purchase_id,
         ProductDB.product_name,
+            ProductDB.image_url,
         Purchase_HistoryDB.quantity,
         Purchase_HistoryDB.registration_date
     ).select_from(Purchase_HistoryDB).join(
