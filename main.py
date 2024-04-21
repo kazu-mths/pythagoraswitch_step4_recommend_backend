@@ -213,6 +213,7 @@ class RecentPurchase(BaseModel):
     product_name: str
     quantity: int
     registration_date: datetime
+    image_url: str
 
 class FavoriteProduct(BaseModel):
     product_id: int
@@ -336,7 +337,8 @@ async def read_user_data(token: str = Query(..., description="Token information"
         Purchase_HistoryDB.purchase_id,
         ProductDB.product_name,
         Purchase_HistoryDB.quantity,
-        Purchase_HistoryDB.registration_date
+        Purchase_HistoryDB.registration_date,
+        ProductDB.image_url
     ).select_from(Purchase_HistoryDB).join(
         ProductDB, Purchase_HistoryDB.product_id == ProductDB.product_id
     ).filter(
@@ -355,7 +357,8 @@ async def read_user_data(token: str = Query(..., description="Token information"
     favorite_products_query = db.query(
         ProductDB.product_id,
         ProductDB.product_name,
-        ProductDB.including_tax_price
+        ProductDB.including_tax_price,
+        ProductDB.image_url
     ).filter(
         ProductDB.product_id.in_(favorite_products_ids_query)
     )
@@ -370,12 +373,14 @@ async def read_user_data(token: str = Query(..., description="Token information"
             purchase_id=purchase.purchase_id,
             product_name=purchase.product_name,
             quantity=purchase.quantity,
-            registration_date=purchase.registration_date
+            registration_date=purchase.registration_date,
+            image_url=purchase.image_url
         ) for purchase in recent_purchases],
         favorite_products=[FavoriteProduct(
             product_id=favorite.product_id,
             product_name=favorite.product_name,
-            including_tax_price=favorite.including_tax_price
+            including_tax_price=favorite.including_tax_price,
+            image_url=favorite.image_url
         ) for favorite in favorite_products]
     )
 
